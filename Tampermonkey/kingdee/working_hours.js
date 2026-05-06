@@ -3,13 +3,16 @@
 // @namespace    http://*.ik3cloud.com
 // @version      0.0.3
 // @icon         http://*.ik3cloud.com/shr/images/shr-16.ico?v=20170728211854
-var version = "0.0.3";
 // @description  http://*.ik3cloud.com 获取金蝶工作时长
 // @author       te3030
 // @match        http://*.ik3cloud.com/shr/dynamic.do?uipk=com.kingdee.eas.hr.ats.app.WorkCalendar.empATSDeskTop&inFrame=true&flag=perself&type=day&fromHeader=true
 // @match        http://*.ik3cloud.com/shr/dynamic.do?uipk=com.kingdee.eas.hr.ats.app.WorkCalendar.empATSDeskTop&inFrame=true&fromHeader=true
 // @grant        none
+// @license      MIT
+// @downloadURL  https://raw.githubusercontent.com/te3030/Stand-alone-script/refs/heads/main/Tampermonkey/kingdee/working_hours.js
+// @updateURL    https://raw.githubusercontent.com/te3030/Stand-alone-script/refs/heads/main/Tampermonkey/kingdee/working_hours.js
 // ==/UserScript==
+var version = "0.0.3";
 
 function gradeChange() {
     console.log($(".mySelect").val());
