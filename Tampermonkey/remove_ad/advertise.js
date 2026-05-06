@@ -6,8 +6,11 @@
 // @author       You
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
 // @grant        none
+// @license      MIT
 // @match      *://*.csdn.net/*
 // @require      https://cdn.bootcdn.net/ajax/libs/jquery-cookie/1.4.1/jquery.cookie.js
+// @downloadURL https://raw.githubusercontent.com/te3030/Stand-alone-script/refs/heads/main/Tampermonkey/remove_ad/advertise.js
+// @updateURL https://raw.githubusercontent.com/te3030/Stand-alone-script/refs/heads/main/Tampermonkey/remove_ad/advertise.js
 // ==/UserScript==
 
 (function () {
