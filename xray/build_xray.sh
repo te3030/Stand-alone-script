@@ -83,3 +83,6 @@ systemctl daemon-reload
 systemctl enable "xray.service" > /dev/null 2>&1
 systemctl restart xray.service
 
+# log
+journalctl -u xray.service -f
+
