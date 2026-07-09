@@ -3,27 +3,17 @@
 # 本脚本由 DeepSeek 协助开发
 
 """
-多代理健康监控与统计系统 v5.2
+多代理健康监控与统计系统 v5.3
 用法:
   python3 proxy_monitor.py <配置文件路径>   # 启动监控
   python3 proxy_monitor.py install [配置文件]  # 安装为系统服务（需要 root）
   python3 proxy_monitor.py --help          # 显示帮助
 """
 
-import os
-import sys
-import time
-import json
-import socket
-import threading
-import logging
-import shutil
-import subprocess
+import os, sys, time, json, socket, threading, logging, shutil, subprocess
 from datetime import datetime, timedelta
 
-import requests
-import yaml
-import sqlite3
+import requests, yaml, sqlite3
 
 # --------------------- 日志 ---------------------
 logging.basicConfig(
@@ -44,7 +34,7 @@ SERVICE_PATH = f"/etc/systemd/system/{SERVICE_NAME}"
 # --------------------- 帮助信息 ---------------------
 def print_help():
     print("""
-多代理健康监控与统计系统
+多代理健康监控与统计系统 (由 DeepSeek 协助开发)
 
 用法:
   python3 proxy_monitor.py <配置文件路径>
@@ -62,15 +52,12 @@ def print_help():
 
 # --------------------- 安装函数 ---------------------
 def install_service(config_file=None):
-    """将脚本和配置文件复制到系统目录，并创建 systemd 服务"""
     if os.geteuid() != 0:
         logger.error("安装服务需要 root 权限，请使用 sudo 运行")
         sys.exit(1)
 
-    # 准备目标目录
     os.makedirs(INSTALL_DIR, exist_ok=True)
 
-    # 复制脚本自身
     script_path = os.path.abspath(__file__)
     target_script = os.path.join(INSTALL_DIR, "proxy_monitor.py")
     try:
@@ -81,7 +68,6 @@ def install_service(config_file=None):
         logger.error(f"复制脚本失败: {e}")
         sys.exit(1)
 
-    # 复制配置文件
     if config_file:
         if not os.path.exists(config_file):
             logger.error(f"指定的配置文件不存在: {config_file}")
@@ -91,10 +77,7 @@ def install_service(config_file=None):
         source_config = "config.yaml"
         if not os.path.exists(source_config):
             logger.error("当前目录下没有 config.yaml，且未指定配置文件路径")
-            source_config = "config.example.yaml"
-            if not os.path.exists(source_config):
-                logger.error("当前目录下没有 config.example.yaml，且未指定配置文件路径")
-                sys.exit(1)
+            sys.exit(1)
     target_config = os.path.join(INSTALL_DIR, "config.yaml")
     try:
         shutil.copy2(source_config, target_config)
@@ -103,9 +86,8 @@ def install_service(config_file=None):
         logger.error(f"复制配置文件失败: {e}")
         sys.exit(1)
 
-    # 写入 systemd 服务文件
     service_content = f"""[Unit]
-Description=Proxy Monitor Service
+Description=Proxy Monitor Service (by DeepSeek)
 After=network.target
 
 [Service]
@@ -126,7 +108,6 @@ WantedBy=multi-user.target
         logger.error(f"写入服务文件失败: {e}")
         sys.exit(1)
 
-    # 重新加载 systemd 并启用服务
     try:
         subprocess.run(["systemctl", "daemon-reload"], check=True)
         subprocess.run(["systemctl", "enable", SERVICE_NAME], check=True)
@@ -197,7 +178,7 @@ class Database:
                     proxy TEXT,
                     api_url TEXT,
                     ip_address TEXT,
-                    domain TEXT,
+                    city TEXT,
                     raw_json TEXT,
                     error_message TEXT
                 );
@@ -217,12 +198,12 @@ class Database:
                 VALUES (?,?,?,?,?,?)""",
                 (proxy, host, port, int(success), lat, err))
 
-    def save_ip(self, use_proxy, proxy, api_url, ip, domain, raw, err=""):
+    def save_ip(self, use_proxy, proxy, api_url, ip, city, raw, err=""):
         with self._conn() as conn:
             conn.execute("""INSERT INTO ip_logs
-                (use_proxy, proxy, api_url, ip_address, domain, raw_json, error_message)
+                (use_proxy, proxy, api_url, ip_address, city, raw_json, error_message)
                 VALUES (?,?,?,?,?,?,?)""",
-                (int(use_proxy), proxy, api_url, ip, domain, raw, err))
+                (int(use_proxy), proxy, api_url, ip, city, raw, err))
 
     def clean_old(self, days):
         cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
@@ -340,16 +321,16 @@ def get_proxy_outbound_ip(proxy_url, ip_urls, timeout):
     for item in ip_urls:
         url = item.get("url")
         ip_path = item.get("ip_json_path", "ip")
-        domain_path = item.get("domain_json_path", "")
+        city_path = item.get("city_json_path", "")
         try:
             proxies = {"http": proxy_url, "https": proxy_url}
             resp = requests.get(url, proxies=proxies, timeout=timeout)
             resp.raise_for_status()
             data = resp.json()
             ip = json_value(data, ip_path)
-            domain = json_value(data, domain_path) if domain_path else ""
+            city = json_value(data, city_path) if city_path else ""
             if ip:
-                return ip, domain
+                return ip, city
         except:
             continue
     return "获取失败", ""
@@ -491,15 +472,15 @@ class ProxyWatcher:
                         break
                     url = item.get("url")
                     ip_path = item.get("ip_json_path", "ip")
-                    domain_path = item.get("domain_json_path", "")
+                    city_path = item.get("city_json_path", "")
                     try:
                         proxies = {"http": self.proxy_url, "https": self.proxy_url}
                         resp = requests.get(url, proxies=proxies, timeout=self.ip_timeout)
                         resp.raise_for_status()
                         data = resp.json()
                         ip = json_value(data, ip_path)
-                        domain = json_value(data, domain_path) if domain_path else ""
-                        self.db.save_ip(True, self.proxy_url, url, ip or "unknown", domain, json.dumps(data, ensure_ascii=False))
+                        city = json_value(data, city_path) if city_path else ""
+                        self.db.save_ip(True, self.proxy_url, url, ip or "unknown", city, json.dumps(data, ensure_ascii=False))
                         logger.info(f"[{self.proxy_label}] 代理IP: {ip}")
                         break
                     except Exception as e:
@@ -591,14 +572,14 @@ class Monitor:
                     break
                 url = item.get("url")
                 ip_path = item.get("ip_json_path", "ip")
-                domain_path = item.get("domain_json_path", "")
+                city_path = item.get("city_json_path", "")
                 try:
                     resp = requests.get(url, timeout=self.ip_timeout)
                     resp.raise_for_status()
                     data = resp.json()
                     ip = json_value(data, ip_path)
-                    domain = json_value(data, domain_path) if domain_path else ""
-                    self.db.save_ip(False, "direct", url, ip or "unknown", domain, json.dumps(data, ensure_ascii=False))
+                    city = json_value(data, city_path) if city_path else ""
+                    self.db.save_ip(False, "direct", url, ip or "unknown", city, json.dumps(data, ensure_ascii=False))
                     logger.info(f"直连IP: {ip}")
                     break
                 except Exception as e:
@@ -713,24 +694,24 @@ def build_startup_message(config, title_prefix):
 
         elif item == "direct_ip":
             direct_ip = "获取中..."
-            direct_domain = ""
+            direct_city = ""
             if ip_urls:
                 for api in ip_urls:
                     url = api.get("url")
                     ip_path = api.get("ip_json_path", "ip")
-                    domain_path = api.get("domain_json_path", "")
+                    city_path = api.get("city_json_path", "")
                     try:
                         resp = requests.get(url, timeout=ip_timeout)
                         data = resp.json()
                         direct_ip = json_value(data, ip_path) or "unknown"
-                        if domain_path:
-                            direct_domain = json_value(data, domain_path) or ""
+                        if city_path:
+                            direct_city = json_value(data, city_path) or ""
                         break
                     except:
                         pass
             ip_str = direct_ip
-            if direct_domain:
-                ip_str += f" ({direct_domain})"
+            if direct_city:
+                ip_str += f" ({direct_city})"
             lines.append(f"**直连IP**: {ip_str}")
             lines.append("")
 
@@ -739,12 +720,12 @@ def build_startup_message(config, title_prefix):
             for p in active_proxies:
                 p_label = p.get("label", p.get("url", ""))
                 if socks_ok or not p.get("url", "").lower().startswith("socks"):
-                    out_ip, out_domain = get_proxy_outbound_ip(p["url"], ip_urls, ip_timeout)
+                    out_ip, out_city = get_proxy_outbound_ip(p["url"], ip_urls, ip_timeout)
                 else:
-                    out_ip, out_domain = "PySocks未安装", ""
+                    out_ip, out_city = "PySocks未安装", ""
                 ip_str = out_ip
-                if out_domain:
-                    ip_str += f" ({out_domain})"
+                if out_city:
+                    ip_str += f" ({out_city})"
                 lines.append(f"  - {p_label}: {ip_str}")
             lines.append("")
 
@@ -769,7 +750,6 @@ def build_startup_message(config, title_prefix):
 
 # --------------------- 主程序 ---------------------
 def main():
-    # 命令行参数解析
     args = sys.argv[1:]
 
     if not args:
@@ -781,12 +761,10 @@ def main():
         sys.exit(0)
 
     if args[0] == "install":
-        # install [config_file]
         config_file = args[1] if len(args) > 1 else None
         install_service(config_file)
         sys.exit(0)
 
-    # 否则第一个参数被当作配置文件路径
     config_path = args[0]
     config = load_config(config_path)
     db = Database(config.get("database", {}).get("path", "monitor.db"))
