@@ -3,7 +3,7 @@
 # 本脚本由 DeepSeek 协助开发
 
 """
-多代理健康监控与统计系统 v5.3
+多代理健康监控与统计系统 v5.4
 用法:
   python3 proxy_monitor.py <配置文件路径>   # 启动监控
   python3 proxy_monitor.py install [配置文件]  # 安装为系统服务（需要 root）
@@ -214,17 +214,30 @@ class Database:
     def stats(self, hours):
         period = f"-{hours} hours"
         with self._conn() as conn:
+            # 下载统计
             cur = conn.execute("SELECT COUNT(*), SUM(success), AVG(speed) FROM download_logs WHERE timestamp > datetime('now',?)", (period,))
             d_total, d_ok, d_avg = cur.fetchone()
+            # 连通性统计
             cur = conn.execute("SELECT COUNT(*), SUM(success), AVG(latency_ms) FROM connectivity_logs WHERE timestamp > datetime('now',?)", (period,))
             c_total, c_ok, c_avg = cur.fetchone()
-            cur = conn.execute("SELECT proxy, ip_address FROM ip_logs WHERE use_proxy=1 AND timestamp > datetime('now',?) ORDER BY timestamp DESC", (period,))
-            proxy_ips = {}
+            # 最近直连 IP 和城市
+            cur = conn.execute("SELECT ip_address, city FROM ip_logs WHERE use_proxy=0 ORDER BY timestamp DESC LIMIT 1")
+            direct_row = cur.fetchone()
+            direct_ip = direct_row[0] if direct_row else "N/A"
+            direct_city = direct_row[1] if direct_row else ""
+            # 每个代理最新的 IP 和城市（仅考虑有代理的记录）
+            cur = conn.execute("""
+                SELECT proxy, ip_address, city FROM ip_logs 
+                WHERE use_proxy=1 AND timestamp > datetime('now',?) 
+                ORDER BY timestamp DESC
+            """, (period,))
+            # 保持每个代理最新的一条
+            proxy_info = {}
             for row in cur.fetchall():
-                if row[0] not in proxy_ips:
-                    proxy_ips[row[0]] = row[1]
-            cur = conn.execute("SELECT ip_address FROM ip_logs WHERE use_proxy=0 ORDER BY timestamp DESC LIMIT 1")
-            direct_ip = cur.fetchone()
+                proxy_url = row[0]
+                if proxy_url not in proxy_info:
+                    proxy_info[proxy_url] = (row[1], row[2])  # (ip, city)
+
         return {
             'download_total': d_total or 0,
             'download_success': d_ok or 0,
@@ -234,8 +247,9 @@ class Database:
             'conn_success': c_ok or 0,
             'conn_fail': (c_total or 0) - (c_ok or 0),
             'conn_avg_latency': c_avg or 0,
-            'proxy_ips': proxy_ips,
-            'direct_ip': direct_ip[0] if direct_ip else "N/A"
+            'direct_ip': direct_ip,
+            'direct_city': direct_city,
+            'proxy_info': proxy_info  # {proxy_url: (ip, city)}
         }
 
 # --------------------- 工具函数 ---------------------
@@ -563,6 +577,9 @@ class Monitor:
         self.stats_interval = stats_cfg.get("send_interval", 3600)
         self.retention_days = config.get("database", {}).get("retention_days", 60)
 
+        # 下载监测频率
+        self.dl_interval = config.get("download", {}).get("interval", 300)
+
     def _direct_ip_loop(self):
         if not self.ip_urls:
             return
@@ -594,7 +611,27 @@ class Monitor:
             self.db.clean_old(self.retention_days)
             s = self.db.stats(self.stats_period)
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            proxy_ips_str = "\n".join([f"  - {k}: {v}" for k, v in s['proxy_ips'].items()]) if s['proxy_ips'] else "  - 无数据"
+
+            # 构建代理出口IP列表
+            proxy_ip_lines = []
+            for proxy_url, (ip, city) in s['proxy_info'].items():
+                # 尝试从配置中获取 label，否则用 url 本身
+                label = proxy_url
+                for p_cfg in self.config.get("proxy", []):
+                    if p_cfg.get("url") == proxy_url:
+                        label = p_cfg.get("label", proxy_url)
+                        break
+                line = f"  - {label}: {ip}"
+                if city:
+                    line += f" ({city})"
+                proxy_ip_lines.append(line)
+            proxy_ip_str = "\n".join(proxy_ip_lines) if proxy_ip_lines else "  - 无数据"
+
+            # 直连IP带城市
+            direct_str = s['direct_ip']
+            if s.get('direct_city'):
+                direct_str += f" ({s['direct_city']})"
+
             text = f"""## 📊 {self.title_prefix}统计报告 ({now})
 ---
 **统计周期**: 最近 {self.stats_period} 小时
@@ -603,14 +640,16 @@ class Monitor:
 - 总次数: {s['download_total']}  成功: {s['download_success']}  失败: {s['download_fail']}
 - 平均速度: {s['download_avg_speed']/1024:.1f} KB/s
 
+**下载监测频率**: 每 {self.dl_interval} 秒
+
 **代理连通性 (汇总)**:
 - 检测次数: {s['conn_total']}  成功: {s['conn_success']}  失败: {s['conn_fail']}
 - 平均延迟: {s['conn_avg_latency']:.1f} ms
 
-**当前公网IP**:
-- 直连: {s['direct_ip']}
-- 代理IP:
-{proxy_ips_str}
+**直连IP**: {direct_str}
+
+**代理出口IP**:
+{proxy_ip_str}
 """
             send_dingtalk(self.webhook, f"{self.title_prefix}统计报告", text)
             self._sleep(self.stats_interval)
